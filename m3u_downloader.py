@@ -3,104 +3,104 @@ import os
 import argparse
 import requests
 from urllib.parse import quote_plus
-from collections import defaultdict
 
 # --- CREDENCIALES ---
-# ZoomEye: APIKEY ó USER/PASS (para JWT)
 ZOOMEYE_API_KEY  = os.environ.get('ZOOMEYE_API_KEY')
 ZOOMEYE_USERNAME = os.environ.get('ZOOMEYE_USERNAME')
 ZOOMEYE_PASSWORD = os.environ.get('ZOOMEYE_PASSWORD')
-# FOFA: EMAIL + KEY
-FOFA_EMAIL = os.environ.get('FOFA_EMAIL')
-FOFA_KEY   = os.environ.get('FOFA_KEY')
+FOFA_EMAIL       = os.environ.get('FOFA_EMAIL')
+FOFA_KEY         = os.environ.get('FOFA_KEY')
 
 # Parámetros de búsqueda
 QUERY = 'Astra Control Panel'
-# Número de páginas a escanear en ZoomEye
 ZOOMEYE_PAGES = 3
-# FOFA retorna hasta 100 por page
-def search_zoomeye(country: str, pages: int = ZOOMEYE_PAGES):
-    """Retorna lista de "ip:port" de ZoomEye filtrado por país."""
-    # Construimos headers
-    if ZOOMEYE_API_KEY:
-        headers = {'API-KEY': ZOOMEYE_API_KEY}
-    else:
-        # obtén JWT
-        login = requests.post(
-            'https://api.zoomeye.org/user/login',
-            json={'username': ZOOMEYE_USERNAME, 'password': ZOOMEYE_PASSWORD}
-        )
-        login.raise_for_status()
-        token = login.json()['access_token']
-        headers = {'Authorization': f'JWT {token}'}
 
+
+def get_zoomeye_headers():
+    if ZOOMEYE_API_KEY:
+        return {'API-KEY': ZOOMEYE_API_KEY}
+    resp = requests.post(
+        'https://api.zoomeye.org/user/login',
+        json={'username': ZOOMEYE_USERNAME, 'password': ZOOMEYE_PASSWORD}
+    )
+    resp.raise_for_status()
+    token = resp.json()['access_token']
+    return {'Authorization': f'JWT {token}'}
+
+
+def fetch_zoomeye_hosts(country: str):
+    headers = get_zoomeye_headers()
     hosts = []
-    for page in range(1, pages + 1):
+    for page in range(1, ZOOMEYE_PAGES + 1):
         params = {'query': f'{QUERY} country:{country}', 'page': page}
-        resp = requests.get('https://api.zoomeye.org/host/search', headers=headers, params=params)
-        if resp.status_code != 200:
+        r = requests.get('https://api.zoomeye.org/host/search', headers=headers, params=params)
+        if r.status_code != 200:
             break
-        data = resp.json()
-        for item in data.get('matches', []):
-            ip = item.get('ip')
-            port = item.get('portinfo', {}).get('port')
+        for m in r.json().get('matches', []):
+            ip = m.get('ip')
+            port = m.get('portinfo', {}).get('port')
             if ip and port:
-                hosts.append(f'{ip}:{port}')
+                hosts.append(f'http://{ip}:{port}/playlist.m3u')
     return hosts
 
 
-def search_fofa(country: str):
-    """Retorna lista de "ip:port" de FOFA filtrado por país."""
+def fetch_fofa_hosts(country: str):
     qbase = quote_plus(f'{QUERY} && country="{country}"')
-    url = 'https://fofa.info/api/v1/search/all'
-    params = {
-        'email': FOFA_EMAIL,
-        'key': FOFA_KEY,
-        'qbase64': qbase,
-        'page': 1,
-        'size': 100
-    }
-    resp = requests.get(url, params=params)
-    resp.raise_for_status()
-    results = resp.json().get('results', [])
-    return [f"{r[0]}:{r[1]}" for r in results if r[0] and r[1]]
+    params = {'email': FOFA_EMAIL, 'key': FOFA_KEY, 'qbase64': qbase, 'page': 1, 'size': 100}
+    r = requests.get('https://fofa.info/api/v1/search/all', params=params)
+    r.raise_for_status()
+    hosts = []
+    for ip, port in r.json().get('results', []):
+        if ip and port:
+            hosts.append(f'http://{ip}:{port}/playlist.m3u')
+    return hosts
 
 
-def fetch_and_save(hosts: list, country: str, source: str):
-    """Descarga playlist y guarda archivos numerados."""
-    out_dir = f'playlists/{source}'
+def list_hosts(country: str, source: str):
+    hosts = fetch_zoomeye_hosts(country) if source == 'zoomeye' else fetch_fofa_hosts(country)
+    out_dir = f'lists/{source}'
     os.makedirs(out_dir, exist_ok=True)
-    count = 0
-    for host in hosts:
-        count += 1
-        url = f'http://{host}/playlist.m3u'
+    path = os.path.join(out_dir, f'hosts_{country}.txt')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(hosts))
+    print(f'[+] Lista de {len(hosts)} URLs guardada en {path}')
+
+
+def download_playlists(country: str, source: str):
+    in_path = os.path.join('lists', source, f'hosts_{country}.txt')
+    if not os.path.isfile(in_path):
+        print(f'Error: {in_path} no existe')
+        return
+    with open(in_path, encoding='utf-8') as f:
+        urls = [line.strip() for line in f if line.strip()]
+    out_dir = f'downloads/{source}'
+    os.makedirs(out_dir, exist_ok=True)
+    for idx, url in enumerate(urls, 1):
         try:
             r = requests.get(url, timeout=5)
             if r.status_code == 200 and r.text.strip():
-                fname = f'{count}_{country}.m3u'
-                path = os.path.join(out_dir, fname)
-                with open(path, 'w', encoding='utf-8') as f:
+                fname = f'{idx}_{country}.m3u'
+                with open(os.path.join(out_dir, fname), 'w', encoding='utf-8') as f:
                     f.write(r.text)
-                print(f'[+] {source}: Guardado {fname}')
+                print(f'[+] Descargado y guardado {fname}')
             else:
-                print(f'[-] {source}: No válido {host} (status {r.status_code})')
+                print(f'[-] Falló {url} (status {r.status_code})')
         except Exception as e:
-            print(f'[-] {source}: Error {host}: {e}')
+            print(f'[-] Error descargando {url}: {e}')
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Escanea y descarga playlists M3U')
-    parser.add_argument('--country', required=True, help='Código de país (ej. AR, PE)')
-    parser.add_argument('--source', choices=['zoomeye', 'fofa', 'both'], default='both')
+    parser = argparse.ArgumentParser(description='Lista y descarga playlists M3U')
+    parser.add_argument('--country', required=True, help='Código de país, ej. AR')
+    parser.add_argument('--action', choices=['list', 'download'], required=True, help='"list": generar lista de URLs, "download": bajar playlists')
+    parser.add_argument('--source', choices=['zoomeye', 'fofa'], required=True, help='Fuente: zoomeye o fofa')
     args = parser.parse_args()
 
     country = args.country.upper()
-    if args.source in ['zoomeye', 'both']:
-        zy_hosts = search_zoomeye(country)
-        fetch_and_save(zy_hosts, country, 'zoomeye')
-    if args.source in ['fofa', 'both']:
-        fofa_hosts = search_fofa(country)
-        fetch_and_save(fofa_hosts, country, 'fofa')
+    if args.action == 'list':
+        list_hosts(country, args.source)
+    else:
+        download_playlists(country, args.source)
 
 if __name__ == '__main__':
     main()
