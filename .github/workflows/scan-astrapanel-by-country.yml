@@ -1,5 +1,5 @@
 # .github/workflows/manual-download.yml
-name: Manual M3U Downloader (Two-Phase, Commit Results)
+name: Auto M3U Downloader
 
 on:
   workflow_dispatch:
@@ -10,93 +10,61 @@ on:
         default: 'AR'
 
 permissions:
-  contents: write    # para poder commitear resultados
-  id-token: write    # si usas OIDC (no obligatorio aquí)
+  contents: write
 
 jobs:
-  zoomeye-download:
-    name: 🔎 ZoomEye Batch
+  zoomeye:
+    name: 🔎 ZoomEye Scan & Download
     runs-on: ubuntu-latest
     env:
       ZOOMEYE_API_KEY:  ${{ secrets.ZOOMEYE_API_KEY }}
       ZOOMEYE_USERNAME: ${{ secrets.ZOOMEYE_USERNAME }}
       ZOOMEYE_PASSWORD: ${{ secrets.ZOOMEYE_PASSWORD }}
-      OUTPUT_DIR:       playlists/zoomeye
     steps:
-      - name: 📥 Checkout repo (with write)
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 💾 Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
+      - run: pip install requests
 
-      - name: 🚀 Run ZoomEye download
-        run: |
-          echo "📍 País: ${{ github.event.inputs.country }}"
-          HOSTS=$(paste -sd' ' hosts-zoomeye.txt)
-          python3 m3u_downloader.py "${{ github.event.inputs.country }}" $HOSTS
+      - name: Run ZoomEye
+        run: python3 m3u_downloader.py --country ${{ github.event.inputs.country }} --source zoomeye
 
-  fofa-download:
-    name: 🔎 FOFA Batch
-    needs: zoomeye-download
+      - name: Commit ZoomEye results
+        run: |
+          git add playlists/zoomeye/
+          git diff --quiet || git commit -m "ZoomEye playlists ${{ github.event.inputs.country }}"
+          git push
+
+  fofa:
+    name: 🔎 FOFA Scan & Download
+    needs: zoomeye
     runs-on: ubuntu-latest
     env:
       FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
       FOFA_KEY:   ${{ secrets.FOFA_KEY }}
-      OUTPUT_DIR: playlists/fofa
     steps:
-      - name: 📥 Checkout repo (with write)
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 💾 Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
+      - run: pip install requests
 
-      - name: 🚀 Run FOFA download
-        run: |
-          echo "📍 País: ${{ github.event.inputs.country }}"
-          HOSTS=$(paste -sd' ' hosts-fofa.txt)
-          python3 m3u_downloader.py "${{ github.event.inputs.country }}" $HOSTS
+      - name: Run FOFA
+        run: python3 m3u_downloader.py --country ${{ github.event.inputs.country }} --source fofa
 
-  commit-results:
-    name: 💾 Commit Playlists Back
-    needs: [zoomeye-download, fofa-download]
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 Checkout repo (with write)
-        uses: actions/checkout@v3
-        with:
-          persist-credentials: true
-          fetch-depth: 0
-
-      - name: 🔧 Configure Git
+      - name: Commit FOFA results
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-      - name: 🚨 Add & Commit playlists
-        run: |
-          git add playlists/zoomeye/ playlists/fofa/ || echo "Nothing to add"
-          git diff --quiet && echo "No changes to commit" || git commit -m "Add playlists for ${{ github.event.inputs.country }}"
-
-      - name: 🚀 Push to repo
-        run: |
-          git push origin HEAD:${{ github.ref_name }}
+          git add playlists/fofa/
+          git diff --quiet || git commit -m "FOFA playlists ${{ github.event.inputs.country }}"
+          git push
