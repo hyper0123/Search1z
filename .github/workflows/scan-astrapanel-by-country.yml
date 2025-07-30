@@ -1,103 +1,79 @@
-name: Scan AstraPanel Hosts
+name: Buscar Astra Control Panel y Listas M3U funcionales
 
 on:
   workflow_dispatch:
     inputs:
       COUNTRY:
-        description: "Código del país (ej: AR, PE, CL)"
+        description: 'Código del país (ej: AR, CL, PE)'
         required: true
 
+permissions:
+  contents: write
+
 jobs:
-  collect-hosts:
+  scan:
     runs-on: ubuntu-latest
     env:
       COUNTRY: ${{ github.event.inputs.COUNTRY }}
-      PLAY_PATH: playlist.m3u
-
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Debug Shodan raw JSON
-        id: shodan_debug
+      - name: Crear carpeta temporal
+        run: mkdir -p temp data/${COUNTRY} listas/${COUNTRY}
+
+      - name: Buscar en Shodan
         env:
-          SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
+          SHODAN_API_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: |
           QUERY='http.title:"Astra Control Panel" country:'${COUNTRY}
-          URL="https://api.shodan.io/shodan/host/search?key=${SHODAN_KEY}&query=${QUERY}&limit=5"
-          echo "Curling Shodan URL: $URL"
-          curl -s "$URL" -o shodan_debug.json || true
-          echo "→ Shodan raw JSON (primeras 20 líneas):"
-          head -n 20 shodan_debug.json || true
-          echo "→ Total resultados Shodan: $(jq '.total // 0' shodan_debug.json)"
+          curl -s "https://api.shodan.io/shodan/host/search?key=${SHODAN_API_KEY}&query=${QUERY}&limit=50" | jq -r '.matches[].ip_str + ":" + (.matches[].port|tostring)' > temp/shodan.txt || true
 
-      - name: Extract Shodan URLs
-        id: extract_shodan
+      - name: Buscar en ZoomEye
         env:
-          SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
+          ZOOMEYE_API_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
         run: |
-          QUERY='http.title:"Astra Control Panel" country:'${COUNTRY}
-          URL="https://api.shodan.io/shodan/host/search?key=${SHODAN_KEY}&query=${QUERY}&limit=500"
-          curl -s "$URL" \
-            | jq -r '.matches[] | "http://\(.ip_str):\(.port)/${PLAY_PATH}"' > shodan_urls.txt || touch shodan_urls.txt
+          curl -s -H "API-KEY: ${ZOOMEYE_API_KEY}" "https://api.zoomeye.org/host/search?query=Astra%20Control%20Panel%20country:${COUNTRY}&page=1" | jq -r '.matches[] | .ip + ":" + (.port|tostring)' > temp/zoomeye.txt || true
 
-      - name: Debug ZoomEye raw JSON
-        id: zoomeye_debug
-        env:
-          ZOOMEYE_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
-        run: |
-          QUERY='title:"Astra Control Panel" country:'${COUNTRY}
-          curl -s -H "API-KEY: $ZOOMEYE_KEY" \
-            "https://api.zoomeye.org/host/search?query=${QUERY}&page_size=5" \
-            -o zoomeye_debug.json || true
-          echo "→ ZoomEye raw JSON (primeras 20 líneas):"
-          head -n 20 zoomeye_debug.json || true
-          echo "→ Total resultados ZoomEye: $(jq '.matches | length' zoomeye_debug.json)"
-
-      - name: Extract ZoomEye URLs
-        id: extract_zoomeye
-        env:
-          ZOOMEYE_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
-        run: |
-          QUERY='title:"Astra Control Panel" country:'${COUNTRY}
-          curl -s -H "API-KEY: $ZOOMEYE_KEY" \
-            "https://api.zoomeye.org/host/search?query=${QUERY}&page_size=50" \
-            | jq -r '.matches[] | select(.portinfo.port != null) | "http://\(.ip):\(.portinfo.port)/${PLAY_PATH}"' > zoomeye_urls.txt || touch zoomeye_urls.txt
-
-      - name: Debug FOFA raw JSON
-        id: fofa_debug
+      - name: Buscar en Fofa
         env:
           FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
-          FOFA_KEY: ${{ secrets.FOFA_API_KEY }}
+          FOFA_API_KEY: ${{ secrets.FOFA_API_KEY }}
         run: |
-          QUERY='title="Astra Control Panel" country='${COUNTRY}
-          curl -s "https://fofa.info/api/v1/search/all?email=${FOFA_EMAIL}&key=${FOFA_KEY}&q=${QUERY}" \
-            -o fofa_debug.json || true
-          echo "→ FOFA raw JSON (primeras 20 líneas):"
-          head -n 20 fofa_debug.json || true
-          echo "→ Total resultados FOFA: $(jq '.results | length' fofa_debug.json)"
+          QUERY='title="Astra Control Panel" && country="'${COUNTRY}'"'
+          BASE64_QUERY=$(echo -n "$QUERY" | base64)
+          curl -s "https://fofa.info/api/v1/search/all?email=${FOFA_EMAIL}&key=${FOFA_API_KEY}&qbase64=${BASE64_QUERY}&size=50" | jq -r '.results[] | .[0]' | sed -nE 's#http[s]?://([^:/]+)(:([0-9]+))?.*#\1:\3#p' > temp/fofa.txt || true
 
-      - name: Extract FOFA URLs
-        id: extract_fofa
-        env:
-          FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
-          FOFA_KEY: ${{ secrets.FOFA_API_KEY }}
+      - name: Unir resultados
         run: |
-          QUERY='title="Astra Control Panel" country='${COUNTRY}
-          curl -s "https://fofa.info/api/v1/search/all?email=${FOFA_EMAIL}&key=${FOFA_KEY}&q=${QUERY}" \
-            | jq -r '.results[] | "http://" + .[0] + ":" + .[1] + "/${PLAY_PATH}"' > fofa_urls.txt || touch fofa_urls.txt
+          cat temp/*.txt | grep -E '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' | sort -u > data/${COUNTRY}/urls.txt
 
-      - name: Unir y deduplicar URLs
+      - name: Probar URLs y extraer listas funcionales
         run: |
-          cat shodan_urls.txt zoomeye_urls.txt fofa_urls.txt 2>/dev/null | sort -u > all_hosts.txt
-          echo "Total únicos encontrados: $(wc -l < all_hosts.txt)"
+          INDEX=1
+          while IFS=: read -r IP PORT; do
+            [ -z "$PORT" ] && PORT=80
+            URL="http://$IP:$PORT/playlist.m3u"
+            echo "🔍 Probing $URL"
+            STATUS=$(curl -s -o temp/playlist.m3u -w "%{http_code}" --max-time 10 "$URL")
+            if [[ "$STATUS" == "200" ]]; then
+              if grep -q ".m3u8" temp/playlist.m3u; then
+                cp temp/playlist.m3u listas/${COUNTRY}/lista$INDEX.m3u
+                echo "✅ Lista válida guardada: listas/${COUNTRY}/lista$INDEX.m3u"
+                INDEX=$((INDEX+1))
+              else
+                echo "⚠️  No contiene streams .m3u8"
+              fi
+            else
+              echo "❌ No disponible ($STATUS)"
+            fi
+            sleep 2
+          done < data/${COUNTRY}/urls.txt
 
       - name: Commit de resultados
         run: |
-          mkdir -p data/${COUNTRY}
-          cp all_hosts.txt data/${COUNTRY}/urls.txt
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add data/${COUNTRY}/urls.txt
-          git commit -m "🔍 URLs Astra Control Panel para ${COUNTRY}" || echo "Nada nuevo para commitear"
+          git add data/${COUNTRY}/urls.txt listas/${COUNTRY}/
+          git commit -m "🔍 Listas válidas de ${COUNTRY}" || echo "Nada que commitear"
           git push
