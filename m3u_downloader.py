@@ -6,13 +6,14 @@ import base64
 from urllib.parse import quote_plus
 
 # --- CREDENCIALES ---
-ZOOMEYE_API_KEY = os.environ.get('ZOOMEYE_API_KEY')
+ZOOMEYE_API_KEY  = os.environ.get('ZOOMEYE_API_KEY')
 ZOOMEYE_USERNAME = os.environ.get('ZOOMEYE_USERNAME')
 ZOOMEYE_PASSWORD = os.environ.get('ZOOMEYE_PASSWORD')
-FOFA_EMAIL = os.environ.get('FOFA_EMAIL')
-FOFA_KEY = os.environ.get('FOFA_KEY')
+FOFA_EMAIL       = os.environ.get('FOFA_EMAIL')
+FOFA_KEY         = os.environ.get('FOFA_KEY')
 
-# Parámetros de búsqueda\QUERY = 'Astra Control Panel'
+# Parámetros de búsqueda
+QUERY = 'Astra Control Panel'
 ZOOMEYE_PAGES = 3
 
 
@@ -20,7 +21,6 @@ def get_zoomeye_headers():
     if ZOOMEYE_API_KEY:
         print('[DEBUG] Usando API-KEY de ZoomEye')
         return {'API-KEY': ZOOMEYE_API_KEY}
-
     # Flujo JWT si no hay APIKEY
     response = requests.post(
         'https://api.zoomeye.org/user/login',
@@ -64,16 +64,18 @@ def fetch_zoomeye_hosts(country: str):
 
 def fetch_fofa_hosts(country: str):
     raw_q = f'{QUERY} && country="{country}"'
-    b64 = base64.b64encode(raw_q.encode()).decode()
+    b64_q = base64.b64encode(raw_q.encode()).decode()
     params = {
         'email': FOFA_EMAIL,
         'key': FOFA_KEY,
-        'qbase64': b64,
+        'qbase64': b64_q,
         'page': 1,
         'size': 100
     }
     r = requests.get('https://fofa.info/api/v1/search/all', params=params)
-    r.raise_for_status()
+    if r.status_code != 200:
+        print(f'[!] FOFA HTTP {r.status_code}')
+        return []
     results = r.json().get('results', [])
 
     hosts = []
@@ -91,7 +93,7 @@ def list_hosts(country: str, source: str):
     else:
         hosts = fetch_fofa_hosts(country)
 
-    out_dir = f'lists/{source}'
+    out_dir = os.path.join('lists', source)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f'hosts_{country}.txt')
 
@@ -110,7 +112,7 @@ def download_playlists(country: str, source: str):
     with open(in_path, 'r', encoding='utf-8') as f:
         urls = [line.strip() for line in f if line.strip()]
 
-    out_dir = f'downloads/{source}'
+    out_dir = os.path.join('downloads', source)
     os.makedirs(out_dir, exist_ok=True)
 
     for idx, url in enumerate(urls, start=1):
@@ -118,8 +120,8 @@ def download_playlists(country: str, source: str):
             r = requests.get(url, timeout=5)
             if r.status_code == 200 and r.text.strip():
                 fname = f'{idx}_{country}.m3u'
-                with open(os.path.join(out_dir, fname), 'w', encoding='utf-8'):
-                    f.write(r.text)
+                with open(os.path.join(out_dir, fname), 'w', encoding='utf-8') as fw:
+                    fw.write(r.text)
                 print(f'[+] Descargado y guardado {fname}')
             else:
                 print(f'[-] Falló {url} (status {r.status_code})')
