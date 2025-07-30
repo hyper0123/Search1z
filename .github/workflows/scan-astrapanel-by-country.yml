@@ -1,5 +1,5 @@
 # .github/workflows/scan-astrapanel-by-country.yml
-name: Escaneo Astra Panel por país y validación de canales (con debug)
+name: Escaneo Astra Panel por país y validación de canales (con debug corregido)
 
 on:
   workflow_dispatch:
@@ -32,79 +32,78 @@ jobs:
           echo "PLAY_PATH=${{ github.event.inputs.playlist_path }}" >> $GITHUB_ENV
 
       - name: Debug Shodan raw JSON
+        id: shodan_debug
         env:
           SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: |
-          # Construir URL codificada
-          QUERY="http.title:\"Astra Control Panel\" country:${COUNTRY}"
+          QUERY="http.title:\\"Astra Control Panel\\" country:${COUNTRY}"
           URL="https://api.shodan.io/shodan/host/search?key=${SHODAN_KEY}&query=${QUERY}&limit=5"
           echo "Curling Shodan URL: $URL"
-          # Descargar y mostrar JSON
           curl -s "$URL" -o shodan_debug.json || true
-          echo "→ Shodan raw JSON (primeros 20 líneas):"
+          echo "→ Shodan raw JSON (primeras 20 líneas):"
           head -n 20 shodan_debug.json || true
           echo "→ Total resultados Shodan: $(jq '.total // 0' shodan_debug.json)"
 
-      - name: Extract Shodan URLs
+      - name: Extraer URLs Shodan
         id: shodan_extracted
         env:
           SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: |
-          QUERY="http.title:\"Astra Control Panel\" country:${COUNTRY}"
+          QUERY="http.title:\\"Astra Control Panel\\" country:${COUNTRY}"
           URL="https://api.shodan.io/shodan/host/search?key=${SHODAN_KEY}&query=${QUERY}&limit=500"
           curl -s "$URL" \
             | jq -r '.matches[] | "http://\(.ip_str):\(.port)/${PLAY_PATH}"' > shodan_urls.txt || touch shodan_urls.txt
-        id: shodan
-        env:
-          SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
-        run: |
-          curl -s "https://api.shodan.io/shodan/host/search?key=$SHODAN_KEY&query=http.title:\"Astra Control Panel\" country:${COUNTRY}&limit=500" \
-            | jq -r '.matches[] | "http://\(.ip_str):\(.port)/${PLAY_PATH}"' > shodan_urls.txt
 
       - name: Debug ZoomEye raw JSON
+        id: zoomeye_debug
         env:
           ZOOMEYE_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
         run: |
-          curl -s -H "API-KEY: $ZOOMEYE_KEY" \
-            "https://api.zoomeye.org/host/search?query=title:\"Astra Control Panel\" country:${COUNTRY}&page_size=5" \
-            -o zoomeye_debug.json
-          echo "→ ZoomEye raw JSON (primeros 20 líneas):"
-          head -n 20 zoomeye_debug.json
+          URL="https://api.zoomeye.org/host/search?query=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}&page_size=5"
+          echo "Curling ZoomEye URL: $URL"
+          curl -s -H "API-KEY: $ZOOMEYE_KEY" "$URL" -o zoomeye_debug.json || true
+          echo "→ ZoomEye raw JSON (primeras 20 líneas):"
+          head -n 20 zoomeye_debug.json || true
           echo "→ Total coincidencias ZoomEye: $(jq '.matches | length' zoomeye_debug.json)"
 
       - name: Extraer URLs ZoomEye
-        id: zoomeye
+        id: zoomeye_extracted
         env:
           ZOOMEYE_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
         run: |
-          curl -s -H "API-KEY: $ZOOMEYE_KEY" \
-            "https://api.zoomeye.org/host/search?query=title:\"Astra Control Panel\" country:${COUNTRY}&page_size=100" \
-            | jq -r '.matches // [] | .[] | "http://\(.ip):\(.port)/${PLAY_PATH}"' > zoomeye_urls.txt
+          URL="https://api.zoomeye.org/host/search?query=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}&page_size=100"
+          curl -s -H "API-KEY: $ZOOMEYE_KEY" "$URL" \
+            | jq -r '.matches // [] | .[] | "http://\(.ip):\(.port)/${PLAY_PATH}"' > zoomeye_urls.txt || touch zoomeye_urls.txt
 
       - name: Debug Fofa raw JSON
+        id: fofa_debug
         env:
           FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
           FOFA_KEY: ${{ secrets.FOFA_KEY }}
         run: |
-          curl -s "https://fofa.info/api/v1/search/all?email=$FOFA_EMAIL&key=$FOFA_KEY&q=title:\"Astra Control Panel\" country:${COUNTRY}" -o fofa_debug.json
-          echo "→ Fofa raw JSON (primeros 20 líneas):"
-          head -n 20 fofa_debug.json
+          URL="https://fofa.info/api/v1/search/all?email=${FOFA_EMAIL}&key=${FOFA_KEY}&q=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}"
+          echo "Curling Fofa URL: $URL"
+          curl -s "$URL" -o fofa_debug.json || true
+          echo "→ Fofa raw JSON (primeras 20 líneas):"
+          head -n 20 fofa_debug.json || true
           echo "→ Total resultados Fofa: $(jq '.results | length' fofa_debug.json)"
 
       - name: Extraer URLs Fofa
-        id: fofa
+        id: fofa_extracted
         env:
           FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
           FOFA_KEY: ${{ secrets.FOFA_KEY }}
         run: |
-          curl -s "https://fofa.info/api/v1/search/all?email=$FOFA_EMAIL&key=$FOFA_KEY&q=title:\"Astra Control Panel\" country:${COUNTRY}" \
-            | jq -r '.results[] | .[0]+":\"+.[1]"' \
-            | sed -E 's/^(.*):(.*)$/http:\/\/\1:\2\/${PLAY_PATH}/' > fofa_urls.txt
+          URL="https://fofa.info/api/v1/search/all?email=${FOFA_EMAIL}&key=${FOFA_KEY}&q=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}"
+          curl -s "$URL" \
+            | jq -r '.results[] | .[0]+":\"+.[1]' \
+            | sed -E 's/^(.*):(.*)$/http:\/\/\1:\2\/${PLAY_PATH}/' > fofa_urls.txt || touch fofa_urls.txt
 
       - name: Construir lista única de URLs
         id: concat
         run: |
-          cat shodan_urls.txt zoomeye_urls.txt fofa_urls.txt 2>/dev/null | sort -u > all_urls.txt || touch all_urls.txt
+          cat shodan_urls.txt zoomeye_urls.txt fofa_urls.txt 2>/dev/null \
+            | sort -u > all_urls.txt || touch all_urls.txt
           URLS=$(paste -sd ' ' all_urls.txt)
           echo "urls=$URLS" >> $GITHUB_OUTPUT
 
@@ -150,6 +149,7 @@ jobs:
               echo "  ⚠️ Sin canales válidos"
             fi
           done < urls_to_check.txt
+
       - name: Commit y push de las listas
         run: |
           git config user.name "github-actions"
@@ -157,4 +157,3 @@ jobs:
           git add playlists/${{ github.event.inputs.country }}/*.m3u
           git commit -m "Add valid playlists for ${{ github.event.inputs.country }} (debug)" || echo "No hay cambios"
           git push
-
