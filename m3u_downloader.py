@@ -2,6 +2,7 @@
 import os
 import argparse
 import requests
+import base64
 from urllib.parse import quote_plus
 
 # --- CREDENCIALES ---
@@ -24,40 +25,48 @@ def get_zoomeye_headers():
         json={'username': ZOOMEYE_USERNAME, 'password': ZOOMEYE_PASSWORD}
     )
     resp.raise_for_status()
-    token = resp.json()['access_token']
+    token = resp.json().get('access_token')
     return {'Authorization': f'JWT {token}'}
 
 
 def fetch_zoomeye_hosts(country: str):
     headers = get_zoomeye_headers()
     hosts = []
+    query_str = f'app:"{QUERY}" country:{country}'
     for page in range(1, ZOOMEYE_PAGES + 1):
-        params = {'query': f'{QUERY} country:{country}', 'page': page}
+        params = {'query': query_str, 'page': page}
         r = requests.get('https://api.zoomeye.org/host/search', headers=headers, params=params)
         if r.status_code != 200:
+            print(f'[!] ZoomEye HTTP {r.status_code} on page {page}')
             break
-        for m in r.json().get('matches', []):
+        data = r.json()
+        for m in data.get('matches', []):
             ip = m.get('ip')
             port = m.get('portinfo', {}).get('port')
             if ip and port:
                 hosts.append(f'http://{ip}:{port}/playlist.m3u')
+    print(f'[+] ZoomEye found {len(hosts)} URLs')
     return hosts
 
 
 def fetch_fofa_hosts(country: str):
-    qbase = quote_plus(f'{QUERY} && country="{country}"')
-    params = {'email': FOFA_EMAIL, 'key': FOFA_KEY, 'qbase64': qbase, 'page': 1, 'size': 100}
+    # FOFA expects base64-encoded qbase
+    raw_q = f'{QUERY} && country="{country}"'
+    b64 = base64.b64encode(raw_q.encode()).decode()
+    params = {'email': FOFA_EMAIL, 'key': FOFA_KEY, 'qbase64': b64, 'page': 1, 'size': 100}
     r = requests.get('https://fofa.info/api/v1/search/all', params=params)
     r.raise_for_status()
-    hosts = []
-    for ip, port in r.json().get('results', []):
-        if ip and port:
-            hosts.append(f'http://{ip}:{port}/playlist.m3u')
+    results = r.json().get('results', [])
+    hosts = [f'http://{ip}:{port}/playlist.m3u' for ip, port in results]
+    print(f'[+] FOFA found {len(hosts)} URLs')
     return hosts
 
 
 def list_hosts(country: str, source: str):
-    hosts = fetch_zoomeye_hosts(country) if source == 'zoomeye' else fetch_fofa_hosts(country)
+    if source == 'zoomeye':
+        hosts = fetch_zoomeye_hosts(country)
+    else:
+        hosts = fetch_fofa_hosts(country)
     out_dir = f'lists/{source}'
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f'hosts_{country}.txt')
