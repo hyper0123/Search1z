@@ -1,11 +1,11 @@
 # .github/workflows/manual-download.yml
-name: Auto M3U Downloader
+name: M3U Downloader (Two-Phase)
 
 on:
   workflow_dispatch:
     inputs:
       country:
-        description: 'Prefijo de país (ej. AR, PE)'
+        description: 'Código de país (ej. AR, PE)'
         required: true
         default: 'AR'
 
@@ -13,8 +13,8 @@ permissions:
   contents: write
 
 jobs:
-  zoomeye:
-    name: 🔎 ZoomEye Scan & Download
+  list-zoomeye:
+    name: 1️⃣ List ZoomEye Hosts
     runs-on: ubuntu-latest
     env:
       ZOOMEYE_API_KEY:  ${{ secrets.ZOOMEYE_API_KEY }}
@@ -27,23 +27,16 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+        with: { python-version: '3.10' }
 
       - run: pip install requests
 
-      - name: Run ZoomEye
-        run: python3 m3u_downloader.py --country ${{ github.event.inputs.country }} --source zoomeye
+      - name: List Hosts from ZoomEye
+        run: python3 m3u_downloader.py --action list --source zoomeye --country ${{ github.event.inputs.country }}
 
-      - name: Commit ZoomEye results
-        run: |
-          git add playlists/zoomeye/
-          git diff --quiet || git commit -m "ZoomEye playlists ${{ github.event.inputs.country }}"
-          git push
-
-  fofa:
-    name: 🔎 FOFA Scan & Download
-    needs: zoomeye
+  list-fofa:
+    name: 2️⃣ List FOFA Hosts
+    needs: list-zoomeye
     runs-on: ubuntu-latest
     env:
       FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
@@ -55,16 +48,45 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+        with: { python-version: '3.10' }
 
       - run: pip install requests
 
-      - name: Run FOFA
-        run: python3 m3u_downloader.py --country ${{ github.event.inputs.country }} --source fofa
+      - name: List Hosts from FOFA
+        run: python3 m3u_downloader.py --action list --source fofa --country ${{ github.event.inputs.country }}
 
-      - name: Commit FOFA results
-        run: |
-          git add playlists/fofa/
-          git diff --quiet || git commit -m "FOFA playlists ${{ github.event.inputs.country }}"
-          git push
+  download-zoomeye:
+    name: 3️⃣ Download ZoomEye Playlists
+    needs: [list-zoomeye, list-fofa]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.10' }
+
+      - run: pip install requests
+
+      - name: Download Playlists (ZoomEye)
+        run: python3 m3u_downloader.py --action download --source zoomeye --country ${{ github.event.inputs.country }}
+
+  download-fofa:
+    name: 4️⃣ Download FOFA Playlists
+    needs: download-zoomeye
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.10' }
+
+      - run: pip install requests
+
+      - name: Download Playlists (FOFA)
+        run: python3 m3u_downloader.py --action download --source fofa --country ${{ github.event.inputs.country }}
