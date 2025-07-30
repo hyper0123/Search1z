@@ -26,7 +26,7 @@ jobs:
       - name: Checkout del repositorio
         uses: actions/checkout@v3
 
-      - name: Configurar variables
+      - name: Configurar variables de entorno
         run: |
           echo "COUNTRY=${{ github.event.inputs.country }}" >> $GITHUB_ENV
           echo "PLAY_PATH=${{ github.event.inputs.playlist_path }}" >> $GITHUB_ENV
@@ -36,8 +36,8 @@ jobs:
         env:
           SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: |
-          # Consulta a la API REST de Shodan para buscar Astra Panel en el país
-          curl -s "https://api.shodan.io/shodan/host/search?key=$SHODAN_KEY&query=http.title:%22Astra Control Panel%22%20country:${COUNTRY}&limit=500" \
+          # Llamada a API REST de Shodan
+          curl -s "https://api.shodan.io/shodan/host/search?key=$SHODAN_KEY&query=http.title:\"Astra Control Panel\" country:${COUNTRY}&limit=500" \
             | jq -r '.matches[] | "http://\(.ip_str):\(.port)/${PLAY_PATH}"' > shodan_urls.txt
 
       - name: Buscar hosts en ZoomEye
@@ -45,14 +45,28 @@ jobs:
         env:
           ZOOMEYE_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
         run: |
-          # Usa la API de ZoomEye para encontrar Astra Panel (manejo de null)
+          # Llamada a API de ZoomEye
           curl -s -H "API-KEY: $ZOOMEYE_KEY" \
-            "https://api.zoomeye.org/host/search?query=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}&page_size=100" \
-            | jq -r '.matches?[] | "http://\(.ip):\(.port)/${PLAY_PATH}"' > zoomeye_urls.txt || echo "" > zoomeye_urls.txt
+            "https://api.zoomeye.org/host/search?query=title:\"Astra Control Panel\" country:${COUNTRY}&page_size=100" \
+            | jq -r '.matches // [] | .[] | "http://\(.ip):\(.port)/${PLAY_PATH}"' > zoomeye_urls.txt
 
-      - name: Buscar hosts en Fofa zoomeye_urls.txt fofa_urls.txt 2>/dev/null \
+      - name: Buscar hosts en Fofa
+        id: fofa
+        env:
+          FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
+          FOFA_KEY: ${{ secrets.FOFA_KEY }}
+        run: |
+          # Llamada a API de Fofa
+          curl -s "https://fofa.info/api/v1/search/all?email=$FOFA_EMAIL&key=$FOFA_KEY&q=title:\"Astra Control Panel\" country:${COUNTRY}" \
+            | jq -r '.results[] | .[0]+":\"+.[1]"' \
+            | sed -E 's/^(.*):(.*)$/http:\/\/\1:\2\/${PLAY_PATH}/' > fofa_urls.txt
+
+      - name: Construir lista única de URLs
+        id: concat
+        run: |
+          # Unir y deduplicar
+          cat shodan_urls.txt zoomeye_urls.txt fofa_urls.txt 2>/dev/null \
             | sort -u > all_urls.txt || touch all_urls.txt
-          # Preparar output para siguiente job
           URLS=$(paste -sd ' ' all_urls.txt)
           echo "urls=$URLS" >> $GITHUB_OUTPUT
 
@@ -70,7 +84,7 @@ jobs:
       - name: Validar playlists y extraer canales
         run: |
           INDEX=1
-          # Leer URLs a comprobar
+          # Extraer URLs a comprobar
           echo "${{ needs.collect-hosts.outputs.urls }}" | tr ' ' '\n' > urls_to_check.txt
 
           while IFS= read -r PLAY_URL; do
@@ -81,13 +95,14 @@ jobs:
               continue
             fi
 
+            # Descargar playlist
             PLAY_FILE="tmp_playlist_${INDEX}.m3u"
             curl -s "$PLAY_URL" -o "$PLAY_FILE"
 
             OUT_FILE="playlists/${{ github.event.inputs.country }}/Lista_${{ github.event.inputs.country }}_${INDEX}.m3u"
             echo "#EXTM3U" > "$OUT_FILE"
 
-            # Validar cada canal dentro de la playlist
+            # Validar cada canal de la playlist
             grep -E '^http' "$PLAY_FILE" | while IFS= read -r CH_URL; do
               CH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$CH_URL")
               if [ "$CH_STATUS" -eq 200 ]; then
@@ -97,7 +112,7 @@ jobs:
               sleep 1
             done
 
-            # Guardar solo si hay canales válidos
+            # Guardar solo listas con canales válidos
             if grep -q '^http' "$OUT_FILE"; then
               echo "  ✅ Lista guardada: $OUT_FILE"
               INDEX=$((INDEX+1))
