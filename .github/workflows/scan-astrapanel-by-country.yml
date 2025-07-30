@@ -45,27 +45,12 @@ jobs:
         env:
           ZOOMEYE_KEY: ${{ secrets.ZOOMEYE_API_KEY }}
         run: |
-          # Usa la API de ZoomEye para encontrar Astra Panel
+          # Usa la API de ZoomEye para encontrar Astra Panel (manejo de null)
           curl -s -H "API-KEY: $ZOOMEYE_KEY" \
             "https://api.zoomeye.org/host/search?query=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}&page_size=100" \
-            | jq -r '.matches[] | "http://\(.ip):\(.port)/${PLAY_PATH}"' > zoomeye_urls.txt
+            | jq -r '.matches?[] | "http://\(.ip):\(.port)/${PLAY_PATH}"' > zoomeye_urls.txt || echo "" > zoomeye_urls.txt
 
-      - name: Buscar hosts en Fofa
-        id: fofa
-        env:
-          FOFA_EMAIL: ${{ secrets.FOFA_EMAIL }}
-          FOFA_KEY: ${{ secrets.FOFA_KEY }}
-        run: |
-          # Llama a la API de Fofa con email y API Key
-          curl -s "https://fofa.info/api/v1/search/all?email=$FOFA_EMAIL&key=$FOFA_KEY&q=title:%5C%22Astra%20Control%20Panel%5C%22%20country:${COUNTRY}" \
-            | jq -r '.results[] | .[0]+":"+.[1]' \
-            | sed "s#^#http://#; s#$#/${PLAY_PATH}#" > fofa_urls.txt
-
-      - name: Construir lista única de URLs
-        id: concat
-        run: |
-          # Unir resultados y eliminar duplicados
-          cat shodan_urls.txt zoomeye_urls.txt fofa_urls.txt 2>/dev/null \
+      - name: Buscar hosts en Fofa zoomeye_urls.txt fofa_urls.txt 2>/dev/null \
             | sort -u > all_urls.txt || touch all_urls.txt
           # Preparar output para siguiente job
           URLS=$(paste -sd ' ' all_urls.txt)
