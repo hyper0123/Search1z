@@ -19,10 +19,13 @@ ZOOMEYE_PAGES = 3
 
 def get_zoomeye_headers():
     if ZOOMEYE_API_KEY:
+        if ZOOMEYE_API_KEY:
+       print('[DEBUG] Usando API-KEY de ZoomEye')
         return {'API-KEY': ZOOMEYE_API_KEY}
     resp = requests.post(
         'https://api.zoomeye.org/user/login',
         json={'username': ZOOMEYE_USERNAME, 'password': ZOOMEYE_PASSWORD}
+        print(f"[DEBUG] Login JWT status: {resp.status_code}")
     )
     resp.raise_for_status()
     token = resp.json().get('access_token')
