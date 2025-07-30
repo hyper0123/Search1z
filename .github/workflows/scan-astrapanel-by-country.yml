@@ -35,12 +35,22 @@ jobs:
         env:
           SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
         run: |
-          curl -s "https://api.shodan.io/shodan/host/search?key=$SHODAN_KEY&query=http.title:\"Astra Control Panel\" country:${COUNTRY}&limit=5" -o shodan_debug.json
+          # Uso de URL codificada para evitar problemas de comillas
+          URL="https://api.shodan.io/shodan/host/search?key=${SHODAN_KEY}&query=http.title:%22Astra%20Control%20Panel%22%20country:${COUNTRY}&limit=5"
+          echo "Curling: $URL"
+          curl -s "$URL" -o shodan_debug.json || exit 1
           echo "→ Shodan raw JSON (primeros 20 líneas):"
           head -n 20 shodan_debug.json
           echo "→ Total resultados Shodan: $(jq '.total?' shodan_debug.json)"
 
       - name: Extraer URLs Shodan
+        id: shodan
+        env:
+          SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
+        run: |
+          URL="https://api.shodan.io/shodan/host/search?key=${SHODAN_KEY}&query=http.title:%22Astra%20Control%20Panel%22%20country:${COUNTRY}&limit=500"
+          curl -s "$URL" \
+            | jq -r '.matches[] | "http://\(.ip_str):\(.port)/${PLAY_PATH}"' > shodan_urls.txt
         id: shodan
         env:
           SHODAN_KEY: ${{ secrets.SHODAN_API_KEY }}
